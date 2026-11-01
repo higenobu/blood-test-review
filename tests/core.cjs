@@ -20,6 +20,19 @@ test('CSVの引用符・改行・BOM・列順・失敗時拒否',()=>{
  assert.throws(()=>C.parseCSV(C.FIELDS.join(',')+'\n'+Array(101).fill('a,5,demo,3,10,demo,true,true').join('\n')));
 });
 test('CSV出力の引用・数式対策',()=>{const s=C.csv([['=1+1','  @sum(a)','日本語,"引用"\n次行']]);assert.ok(s.startsWith('\uFEFF'));assert.ok(s.includes("\"'=1+1\""));assert.ok(s.includes('"日本語,""引用""\n次行"'));});
+test('4列CSV・空の末尾列・数値範囲・共有単位',()=>{
+ const text='Test,Value,Normal Range,Unit,\n"Synthetic, A",6,2 - 9,demo,\nSynthetic B,2,2–9,demo,\nSynthetic C,4,> 4,demo,\nSynthetic D,8,<= 8,demo,\n';
+ const rows=C.parseCSV(text);assert.equal(rows.length,4);assert.equal(rows[0].item,'Synthetic, A');assert.equal(rows[0].reference_unit,'demo');
+ assert.deepEqual(rows.map(C.compare).map(r=>r.status),['within','within','low','within']);
+ assert.equal(C.parseReference('-5 - -1').lower,'-5');assert.equal(C.parseReference('2e-3-9e-3').upper,'9e-3');
+ assert.throws(()=>C.parseCSV('Test,Value,Normal Range,Unit,\nA,6,2-9,demo,do not discard'));
+});
+test('日付化された範囲・自由文を推測せず判定不可にし原文を残す',()=>{
+ for(const raw of ['9月17日','Sep-80','See laboratory note','9/17/2026','']){
+  const rows=C.parseCSV('Test,Value,Normal Range,Unit\nSynthetic,6,'+raw+',demo');
+  assert.equal(rows[0].lower,'');assert.equal(rows[0].upper,'');const r=C.compare(rows[0]);assert.equal(r.status,'unknown');assert.ok(r.reference_note);assert.equal(C.range(r),raw||'基準範囲の記載なし');
+ }
+});
 test('AIの捏造・分類変更・重複・不足・自由記述を拒否',()=>{
  const rows=[C.compare(row({value:'12'}),0),C.compare(row({value:'2'}),1),C.compare(row({unit:''}),2),C.compare(row({}),3)];
  const valid={groups:{high:['R1'],low:['R2'],unknown:['R3']},questions:['reference']};

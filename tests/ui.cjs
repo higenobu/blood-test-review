@@ -1,7 +1,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),{JSDOM}=require('jsdom');
 const tick=()=>new Promise(r=>setImmediate(r));
 async function setup(){
- const dom=new JSDOM(fs.readFileSync('static/index.html','utf8'),{runScripts:'outside-only',url:'https://llm-jp.com/blood-test/'}),w=dom.window,calls=[];let resolveGeneration;
+ const dom=new JSDOM(fs.readFileSync('static/index.html','utf8'),{runScripts:'outside-only',url:'https://llm-jp.com/blood-test/'}),w=dom.window,calls=[];let resolveGeneration;w.TextDecoder=TextDecoder;
  w.fetch=async(url,options)=>{calls.push({url,options});if(url.endsWith('auth/login'))return {ok:true,json:async()=>({access_token:'test-token'})};return await new Promise(r=>{resolveGeneration=r;});};
  w.eval(fs.readFileSync('static/core.js','utf8'));w.eval(fs.readFileSync('static/app.js','utf8'));await tick();w.document.getElementById('clear').click();
  return {dom,w,d:w.document,calls,resolve(data){resolveGeneration({ok:true,json:async()=>data});}};
@@ -29,4 +29,13 @@ test('正しいAI分類のみ確認メモを表示。同意撤回で消去',asyn
  s.resolve({answer:JSON.stringify({groups:{high:['R1'],low:['R3'],unknown:[]},questions:['reference','unit']})});await tick();
  assert.equal(d.getElementById('aiResult').hidden,false);assert.ok(d.getElementById('aiNotes').textContent.includes('基準範囲'));assert.equal(d.querySelectorAll('#table tbody tr').length,3);
  d.getElementById('consent').checked=false;d.getElementById('consent').dispatchEvent(new w.Event('change'));assert.ok(d.getElementById('aiResult').hidden);assert.ok(d.getElementById('ai').disabled);s.dom.window.close();
+});
+test('4列ファイル入力→原文表示→判定不可→手動修正で再比較',async()=>{
+ const s=await setup(),{w,d}=s;const text='Test,Value,Normal Range,Unit,\nSynthetic A,6,2-9,demo,\nSynthetic B,6,9月17日,demo,\n';
+ const bytes=new TextEncoder().encode(text),file={size:bytes.length,arrayBuffer:async()=>bytes.buffer};
+ Object.defineProperty(d.getElementById('file'),'files',{configurable:true,value:[file]});d.getElementById('file').dispatchEvent(new w.Event('change'));await tick();
+ assert.equal(d.querySelectorAll('#inputs tr').length,2);assert.ok(d.querySelector('.reference-note').textContent.includes('9月17日'));
+ d.getElementById('compare').click();assert.equal(d.querySelectorAll('#table .unknown').length,1);assert.ok(d.getElementById('table').textContent.includes('9月17日'));assert.equal(s.calls.length,0);
+ const row=d.querySelectorAll('#inputs tr')[1],lower=row.querySelector('[data-field=lower]'),upper=row.querySelector('[data-field=upper]');lower.value='2';lower.dispatchEvent(new w.Event('input'));upper.value='9';upper.dispatchEvent(new w.Event('input'));
+ d.getElementById('compare').click();assert.equal(d.querySelectorAll('#table .within').length,2);assert.equal(d.querySelector('.reference-note'),null);s.dom.window.close();
 });
