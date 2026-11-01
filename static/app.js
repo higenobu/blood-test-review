@@ -7,16 +7,20 @@ function clearAI(){revision++;if(aiController)aiController.abort();aiController=
 function changed(){clearAI();result=null;$('report').hidden=true;for(const id of ['metrics','table','findings'])$(id).replaceChildren();$('summary').textContent='';$('status').textContent='入力が変わりました。比較表を作成してください。';controls();}
 function addRow(data=blank()){
  if($('inputs').children.length>=100)throw Error('100項目まで入力できます');
- const tr=document.createElement('tr');
+ const tr=document.createElement('tr');tr.dataset.referenceNote=data.reference_note||'';
  for(const key of ['item','value','unit','lower','lower_inclusive','upper','upper_inclusive','reference_unit']){
   const td=document.createElement('td'),input=document.createElement(key.endsWith('_inclusive')?'select':'input');input.dataset.field=key;input.setAttribute('aria-label',({item:'項目名',value:'測定値',unit:'測定単位',lower:'基準下限',upper:'基準上限',reference_unit:'基準単位',lower_inclusive:'下限の境界条件',upper_inclusive:'上限の境界条件'})[key]);
   if(key.endsWith('_inclusive')){for(const [v,text] of [['true','境界を含む'],['false','境界を含まない']]){const option=document.createElement('option');option.value=v;option.textContent=text;input.append(option);}}
   else{input.type='text';input.maxLength=key==='item'?100:200;if(['value','lower','upper'].includes(key))input.inputMode='decimal';}
-  input.value=data[key]??(key.endsWith('_inclusive')?'true':'');input.addEventListener('input',changed);input.addEventListener('change',changed);td.append(input);tr.append(td);
+  input.value=data[key]??(key.endsWith('_inclusive')?'true':'');
+  const onEdit=()=>{if(['lower','upper'].includes(key)){tr.dataset.referenceNote='';tr.querySelector('.reference-note')?.remove();}changed();};
+  input.addEventListener('input',onEdit);input.addEventListener('change',onEdit);td.append(input);
+  if(key==='lower'&&data.reference_note){const note=document.createElement('small');note.className='reference-note';note.textContent='元の範囲：'+data.reference_note+'（要確認。上下限を検査票から入力してください）';td.append(note);}
+  tr.append(td);
  }
  const td=document.createElement('td'),remove=document.createElement('button');remove.type='button';remove.className='quiet';remove.textContent='削除';remove.addEventListener('click',()=>{tr.remove();changed();});td.append(remove);tr.append(td);$('inputs').append(tr);controls();
 }
-function readRows(){return [...$('inputs').children].map(tr=>Object.fromEntries([...tr.querySelectorAll('[data-field]')].map(el=>[el.dataset.field,el.value])));}
+function readRows(){return [...$('inputs').children].map(tr=>({...Object.fromEntries([...tr.querySelectorAll('[data-field]')].map(el=>[el.dataset.field,el.value])),reference_note:tr.dataset.referenceNote||''}));}
 function loadRows(rows){changed();$('inputs').replaceChildren();rows.forEach(addRow);$('status').textContent=rows.length+'項目を読み込みました。内容と基準範囲を確認してください。';controls();}
 function cell(tag,value,parent){const el=document.createElement(tag);el.textContent=value;parent.append(el);return el;}
 function render(){

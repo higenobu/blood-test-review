@@ -11,10 +11,11 @@
  }
  function inclusive(value){if(value===''||value===undefined||value===true||value==='true')return true;if(value===false||value==='false')return false;throw Error('境界条件はtrueまたはfalseで指定してください');}
  function compare(row,index=0){
-  const r={id:'R'+(index+1),...Object.fromEntries(FIELDS.map(k=>[k,String(row[k]??'').trim()])),status:'unknown',reason:''};
+  const r={id:'R'+(index+1),...Object.fromEntries(FIELDS.map(k=>[k,String(row[k]??'').trim()])),reference_note:String(row.reference_note??'').trim(),status:'unknown',reason:''};
   try{
    if(!r.item)throw Error('項目名がありません');
    if(r.item.length>100||FIELDS.some(k=>r[k].length>200))throw Error('入力が長すぎます');
+   if(r.reference_note)throw Error('基準範囲を数値として確認できません。元の検査票で確認してください：'+r.reference_note.slice(0,200));
    const v=number(r.value),lo=number(r.lower),hi=number(r.upper),li=inclusive(row.lower_inclusive),ui=inclusive(row.upper_inclusive);
    if(v===null)throw Error('測定値がありません');
    if(lo===null&&hi===null)throw Error('基準範囲がありません');
@@ -42,12 +43,30 @@
   row.push(field);if(row.some(x=>x!==''))rows.push(row);
   if(rows.length<2)throw Error('CSVにはヘッダーと1行以上のデータが必要です');
   const header=rows.shift().map(x=>x.trim());
-  if(header.length!==FIELDS.length||FIELDS.some(k=>!header.includes(k))||new Set(header).size!==FIELDS.length)throw Error('CSVの列名がテンプレートと一致しません');
+  // Ignore only wholly empty trailing columns (including their header).
+  while(header.length&&header[header.length-1]===''&&rows.every(r=>r.length===header.length&&r[r.length-1].trim()==='')){header.pop();rows.forEach(r=>r.pop());}
+  const standard=header.length===FIELDS.length&&FIELDS.every(k=>header.includes(k))&&new Set(header).size===FIELDS.length;
+  const simple=header.length===4&&new Set(header.map(k=>k.toLowerCase())).size===4&&['test','value','normal range','unit'].every(k=>header.some(h=>h.toLowerCase()===k));
+  if(!standard&&!simple)throw Error('列名は8列テンプレート、または Test,Value,Normal Range,Unit の4列にしてください');
   if(rows.length>100)throw Error('100項目まで入力できます');
-  return rows.map((row,i)=>{if(row.length!==header.length)throw Error('CSVの'+(i+2)+'行目の列数が一致しません');return Object.fromEntries(header.map((k,j)=>[k,row[j]]));});
+  return rows.map((row,i)=>{
+   if(row.length!==header.length)throw Error('CSVの'+(i+2)+'行目の列数が一致しません');
+   if(standard)return Object.fromEntries(header.map((k,j)=>[k,row[j]]));
+   const values=Object.fromEntries(header.map((k,j)=>[k.toLowerCase(),row[j]]));
+   return {item:values.test,value:values.value,unit:values.unit,reference_unit:values.unit,...parseReference(values['normal range'])};
+  });
+ }
+ function parseReference(raw){
+  const text=String(raw??'').trim(),n='[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d{1,3})?';
+  const range=text.match(new RegExp('^('+n+')\\s*[-–−〜~]\\s*('+n+')$'));
+  if(range)return {lower:range[1],upper:range[2],lower_inclusive:'true',upper_inclusive:'true',reference_note:''};
+  const bound=text.match(new RegExp('^(<=|>=|<|>|≤|≥)\\s*('+n+')$'));
+  if(bound){const low=['>','>=','≥'].includes(bound[1]),inclusive=['<=','>=','≤','≥'].includes(bound[1]);return {lower:low?bound[2]:'',upper:low?'':bound[2],lower_inclusive:String(inclusive),upper_inclusive:String(inclusive),reference_note:''};}
+  // Dates and free text are never reconstructed into numerical limits.
+  return {lower:'',upper:'',lower_inclusive:'true',upper_inclusive:'true',reference_note:text||'基準範囲の記載なし'};
  }
  function csv(rows){const cell=x=>{let s=String(x??'');if(/^[\s\uFEFF]*[=+@-]/u.test(s)||/^[\t\r\n]/.test(s))s="'"+s;return '"'+s.replaceAll('"','""')+'"';};return '\uFEFF'+rows.map(r=>r.map(cell).join(',')).join('\r\n');}
- function range(r){return (r.lower===''?'下限なし':(r.lower_inclusive==='false'?'> ':'≥ ')+r.lower)+' / '+(r.upper===''?'上限なし':(r.upper_inclusive==='false'?'< ':'≤ ')+r.upper)+' '+r.reference_unit;}
+ function range(r){if(r.reference_note)return r.reference_note;return (r.lower===''?'下限なし':(r.lower_inclusive==='false'?'> ':'≥ ')+r.lower)+' / '+(r.upper===''?'上限なし':(r.upper_inclusive==='false'?'< ':'≤ ')+r.upper)+' '+r.reference_unit;}
  function summary(rows){const count=s=>rows.filter(r=>r.status===s).length;return rows.length+'項目：範囲内 '+count('within')+'件、高値 '+count('high')+'件、低値 '+count('low')+'件、判定不可 '+count('unknown')+'件。入力された基準範囲との比較結果であり、疾患の有無・重症度・緊急性は判定していません。';}
  const TOPICS={reference:'検査施設の基準範囲と、年齢・性別などの適用条件を医療者に確認してください。',unit:'測定値と基準範囲の単位・検査法が一致するか確認してください。',conditions:'採血条件や服薬など、結果の解釈に必要な情報を医療者と確認してください。'};
  function aiPrompt(rows){return '検査結果の比較表を確認用に整理してください。診断・病名・治療・緊急性を推論しないでください。入力は匿名IDと比較区分だけです。次のJSONだけを返してください。groupsには入力のhigh,low,unknownの全IDを過不足なくそのまま分類。withinは含めない。questionsはreference,unit,conditionsから重複なしで選択。余分なキーや文章は不可。形式 {"groups":{"high":[],"low":[],"unknown":[]},"questions":["reference","unit","conditions"]}\n入力データ:\n'+JSON.stringify(rows.map(({id,status})=>({id,status})));}
@@ -59,6 +78,6 @@
   if(!Array.isArray(data.questions)||!data.questions.length||data.questions.length>3||new Set(data.questions).size!==data.questions.length||data.questions.some(q=>!Object.hasOwn(TOPICS,q)))throw Error('AIの確認項目を検証できませんでした。');
   return data;
  }
- const api={FIELDS,LABELS,number,compare,parseCSV,csv,range,summary,TOPICS,aiPrompt,validateAI};
+ const api={FIELDS,LABELS,number,compare,parseReference,parseCSV,csv,range,summary,TOPICS,aiPrompt,validateAI};
  if(typeof module!=='undefined'&&module.exports)module.exports=api;else root.BloodReview=api;
 })(typeof window!=='undefined'?window:globalThis);
